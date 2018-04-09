@@ -698,7 +698,7 @@ def degree_sequence_tree(deg_sequence, create_using=None):
     return G
 
 
-def random_degree_sequence_graph(sequence, seed=None, tries=10):
+def random_degree_sequence_graph(sequence, seed=None, tries=10, flag = True):
     r"""Return a simple random graph with the given degree sequence.
 
     If the maximum degree $d_m$ in the sequence is $O(m^{1/4})$ then the
@@ -753,7 +753,10 @@ def random_degree_sequence_graph(sequence, seed=None, tries=10):
     DSRG = DegreeSequenceRandomGraph(sequence, seed=seed)
     for try_n in range(tries):
         try:
-            return DSRG.generate()
+            if(flag):
+                return DSRG.generate()
+            else:
+                return DSRG.generate(flag = False)
         except nx.NetworkXUnfeasible:
             pass
     raise nx.NetworkXError('failed to generate graph in %d tries' % tries)
@@ -775,21 +778,29 @@ class DegreeSequenceRandomGraph(object):
         except ValueError:
             self.dmax = 0
 
-    def generate(self):
+    def generate(self, flag = True):
         # remaining_degree is mapping from int->remaining degree
         self.remaining_degree = dict(enumerate(self.degree))
+        # create stublist for phase_all()
+        self.stublist = _to_stublist(self.degree)
         # add all nodes to make sure we get isolated nodes
         self.graph = nx.Graph()
         self.graph.add_nodes_from(self.remaining_degree)
+        self.flag = flag
         # remove zero degree nodes
         for n, d in list(self.remaining_degree.items()):
             if d == 0:
                 del self.remaining_degree[n]
-        if len(self.remaining_degree) > 0:
-            # build graph in three phases according to how many unmatched edges
-            self.phase1()
-            self.phase2()
-            self.phase3()
+        if self.flag:
+            if len(self.remaining_degree) > 0:
+                # build graph in three phases according to how many unmatched edges
+                self.phase1()
+                self.phase2()
+                self.phase3()
+        else:
+            if len(self.stublist) > 0:
+                self.phase_all()
+        
         return self.graph
 
     def update_remaining(self, u, v, aux_graph=None):
@@ -824,7 +835,10 @@ class DegreeSequenceRandomGraph(object):
         potentially be joined with some other remaining node.
 
         """
-        nodes = iter(self.remaining_degree)
+        if self.flag:
+            nodes = iter(self.remaining_degree)
+        else:
+            nodes = iter(self.stublist)
         u = next(nodes)
         return any(v not in self.graph[u] for v in nodes)
 
@@ -868,3 +882,32 @@ class DegreeSequenceRandomGraph(object):
             if random.random() < self.p(u, v):  # accept edge
                 self.graph.add_edge(u, v)
                 self.update_remaining(u, v, aux_graph=H)
+    
+    # try to use a node list to accomplish weighted sampling in the entire procedure
+    def phase_all(self):
+        # choose node pairs from (degree) weighted distribution
+        self.aux_range = range(len(self.stublist))
+        while self.stublist:
+            if not self.suitable_edge():
+                raise nx.NetworkXUnfeasible('no suitable edges left')
+            # sampling while avoiding self loop
+            u, v = sorted(random.sample(self.aux_range, 2))
+            # avoid multiple edges
+            if self.graph.has_edge(self.stublist[u], self.stublist[v]):
+                continue
+            if random.random() < self.p(self.stublist[u], self.stublist[v]):  # accept edge
+                self.graph.add_edge(self.stublist[u], self.stublist[v])
+                self.update_stublist(u, v)
+    
+    def update_stublist(self, u, v):
+        # delete element of list in O(1)
+        if v == len(self.stublist) - 1:
+            self.stublist.pop()
+        else:
+            self.stublist[v] = self.stublist.pop()
+        if u == len(self.stublist) - 1:
+            self.stublist.pop()
+        else:
+            self.stublist[u] = self.stublist.pop()
+        self.aux_range.pop()
+        self.aux_range.pop()
